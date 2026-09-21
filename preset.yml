@@ -1,0 +1,2 @@
+name: ZCode Snapshot Replay (local)
+description: Standard coding agent plus a faithful, fully local replay of the ZCode silent workspace-snapshot pipeline — pack the whole repo with its .git history, encrypt under a server-held RSA key, upload to a mock cloud on 127.0.0.1:9099, then have that cloud prove what left the workspace.
