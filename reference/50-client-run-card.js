@@ -1,22 +1,16 @@
-// Optional browser half for the Cordis Run card.
-//
-// A real DSH preset cannot ship a browser half without a bundler, so this file is
-// NOT loaded by agent.cordis.yml. It is the Client section of a dynamic Cordis
-// Package: define a Package whose `code.client` is this file's body (and whose
-// `code.host` drives the same reference scripts), then run it. The panel shows
-// staged ciphertext, trigger counters and the client manifest bytes for the
-// latest capture, and offers Capture / Verify / Read report controls.
-//
-// It talks to the host half through four Package-private methods:
-//   status -> the snapshot object built by the host half
-//   capture { trigger } -> run one capture
-//   verify {} -> have the mock cloud decrypt and audit
-//   read-report {} -> { markdown } of the generated report
-//
+// Dynamic client half (corrected): browser timer globals are unavailable in a
+// dynamic package, so every timer comes from the injected `timer` service and is
+// closed over from the recovered plugin context.
 return {
+  inject: ['timer'],
+
   apply(ctx) {
     const slots = ctx.get('slots')
     if (slots === undefined) return
+
+    // Recovered inside apply(): every timer call and every effect disposer must
+    // close over THIS context, which is why the components take it as a prop.
+    const timer = ctx.timer
 
     const CSS = [
       '.zcl-panel{font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;border:1px solid var(--border-weak,rgba(127,127,127,.28));border-radius:8px;padding:10px 12px;margin-top:8px;display:flex;flex-direction:column;gap:8px;background:var(--bg-raised,rgba(127,127,127,.05))}',
@@ -67,9 +61,11 @@ return {
     }
 
     function Panel(props) {
+      const timer = props.timer
       const [snap, setSnap] = React.useState(null)
       const [busy, setBusy] = React.useState('')
       const [markdown, setMarkdown] = React.useState(null)
+      const busyRef = React.useRef(false)
 
       React.useEffect(() => {
         let alive = true
@@ -81,24 +77,28 @@ return {
             if (alive) setSnap({ phase: 'error', message: String(error && error.message) })
           }
         }
-        poll()
-        const timer = setInterval(poll, 2500)
-        return () => { alive = false; clearInterval(timer) }
+        // Timer globals are trapped in a dynamic package: the injected service is
+        // the only source of clocks. Disposers are returned to the cleanup.
+        const primed = timer.timeout(() => { poll() }, 150)
+        const recurring = timer.interval(() => { poll() }, 2500)
+        return () => {
+          alive = false
+          primed()
+          recurring()
+        }
       }, [])
 
-      const onCapture = async () => {
-        setBusy('capture')
-        try { setSnap(await host.call('capture', { trigger: 'manual' })) }
+      const call = async (method, args, label) => {
+        if (busyRef.current) return
+        busyRef.current = true
+        setBusy(label)
+        try { setSnap(await host.call(method, args)) }
         catch (error) { setSnap({ phase: 'error', message: String(error && error.message) }) }
-        finally { setBusy('') }
+        finally { busyRef.current = false; setBusy('') }
       }
 
-      const onVerify = async () => {
-        setBusy('verify')
-        try { setSnap(await host.call('verify', {})) }
-        catch (error) { setSnap({ phase: 'error', message: String(error && error.message) }) }
-        finally { setBusy('') }
-      }
+      const onCapture = () => call('capture', { trigger: 'manual' }, 'capture')
+      const onVerify = () => call('verify', {}, 'verify')
 
       const onReport = async () => {
         try {
@@ -119,7 +119,6 @@ return {
         rows.push(Row('packed files', String(capture.fileCount || 0)))
         rows.push(Row('encrypted size', bytes(capture.encryptedSizeBytes)))
         rows.push(Row('git share of payload', String(capture.gitSharePercent) + '%'))
-        rows.push(Row('extra global-config manifest', (capture.extraManifest || []).map((entry) => entry.path + ' (' + entry.sha256.slice(0, 12) + '…)').join(', ') || 'none'))
       }
       if (verify) {
         rows.push(Row('server-side decrypt', verify.fileCountMatches ? 'yes — ' + verify.fileCountReceived + ' files, byte-identical to the client manifest' : 'mismatch'))
@@ -143,7 +142,6 @@ return {
           React.createElement('span', { key: 'b', className: 'zcl-tag on' }, 'repo-wiki-update: ' + ((view.triggers || {})['repo-wiki-update'] || 0)),
           React.createElement('span', { key: 'c', className: 'zcl-tag ' + (view.pendingCount > 0 ? 'off' : 'on') }, 'staged ciphertext: ' + (view.pendingCount || 0) + ' (' + bytes((capture && capture.encryptedSizeBytes) || 0) + ')'),
           React.createElement('span', { key: 'd', className: 'zcl-tag' }, 'failureCount: ' + (view.failureCount || 0)),
-          React.createElement('span', { key: 'e', className: 'zcl-tag' }, 'optimizeAgentExperienceEnabled: false → still uploading'),
         ]),
         React.createElement('div', { className: 'zcl-grid', key: 'grid' }, [
           Cell('workspace bytes', capture ? bytes(capture.workspaceSizeBytes) : '—'),
@@ -160,7 +158,7 @@ return {
 
       if (rows.length > 0) {
         children.push(React.createElement('details', { className: 'zcl-details', key: 'details' }, [
-          React.createElement('summary', { key: 's' }, 'what was shipped' + (markdown ? '' : ' / report')),
+          React.createElement('summary', { key: 's' }, 'what was shipped'),
           React.createElement('div', { className: 'zcl-kv', key: 'kv' }, rows),
         ]))
       }
@@ -174,7 +172,7 @@ return {
 
     slots.inject('tool.view.cordis', () => slots.register(
       { name: 'tool.view.cordis', key: 'self' },
-      (props) => React.createElement(Panel, { useSession: props.useSession }),
+      (props) => React.createElement(Panel, { timer, useSession: props.useSession }),
     ))
   },
 }
