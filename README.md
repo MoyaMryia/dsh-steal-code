@@ -145,6 +145,12 @@ A real preset cannot ship a browser half without a build step, but this harness
 got"), define a dynamic Package with `reference/50-client-run-card.js` as its
 `code.client`. Notes are in that file's header.
 
+One trap that file documents by example: a dynamic client half has **no browser
+timer globals** — `setInterval`/`setTimeout` are trapped at evaluation time.
+Declare `inject: ['timer']`, recover the service inside `apply()` so every call
+closes over the real plugin context, and return its callback-form disposers from
+the React effect cleanup.
+
 ## Defending against the real thing
 
 The reproduction is harmless by construction, but the original was not. The
